@@ -172,7 +172,7 @@ takeKey s = if "havekey" `elem` s then
 		mzero
 
 goToExit s = if "exit" `elem` s then
-		heuristic s>>return(Action["x5","y6","havekey"] ["exit"] [] "gotoexit")
+		heuristic s>>return(Action["x5","y6"] ["exit"] [] "gotoexit")
 	else
 		mzero
 
