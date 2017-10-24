@@ -1,9 +1,10 @@
-{-# LANGUAGE TypeFamilies, GeneralizedNewtypeDeriving, DeriveFunctor, TupleSections, ScopedTypeVariables, ConstraintKinds #-}
+{-# LANGUAGE TypeFamilies, GeneralizedNewtypeDeriving, DeriveFunctor, TupleSections, ScopedTypeVariables, ConstraintKinds, StandaloneDeriving, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, UndecidableInstances #-}
 
 module Daedalus.Strategy.AStar (AStarState(..), heuristicEstimate, AStarT, aStarStrategy', runAStarT) where
 
 import Data.PQueue.Prio.Min
 import Control.Monad.State
+import Control.Monad.Reader
 import Control.Monad.Writer
 import Control.Monad.Trans
 import Control.Monad
@@ -25,6 +26,12 @@ newtype AStarT c m t = AStarT { unAStarT :: WriterT
 	(AStarState c)
 	m)
 	t } deriving (Functor, Applicative, Monad)
+
+deriving instance (MonadReader r m, Monoid c, Ord c) => MonadReader r(AStarT c m)
+instance (MonadWriter r m, Monoid c, Ord c) => MonadWriter r(AStarT c m) where
+	writer = AStarT. lift.writer
+instance (MonadState r m, Monoid c, Ord c) => MonadState r(AStarT c m) where
+	state = AStarT. lift.lift.state
 
 instance (Ord c) => MonadTrans(AStarT c) where
 	{-# INLINE lift #-}
@@ -57,7 +64,8 @@ instance (Modality m, Monoid c, Ord c) => Costly(AStarT c m) where
 		strategySearchT$techCoda
 			(\x -> lift(AStarT(put state))>>return x)
 			(lift(AStarT(put$!AStarState(costSoFar state <> c) heuristic)))
---		>>aStarStrategy'(return())
+	{-# INLINE getCost #-}
+	getCost = liftM(\state->(costSoFar state,recentHeuristic state)) (lift(AStarT get))
 
 -------------------------------------------
 

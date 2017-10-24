@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, DeriveFunctor, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeFamilies, DeriveFunctor, GeneralizedNewtypeDeriving, FlexibleContexts, FlexibleInstances, MultiParamTypeClasses, UndecidableInstances #-}
 
 module Daedalus.Strategy.Iterative (IterativeT, iterativeStrategy, runIterativeT) where
 
@@ -10,6 +10,13 @@ import Daedalus.Cost
 newtype IterativeT m t = IterativeT { unIterativeT :: RWST Int Any() m t }
 	deriving (Functor, Applicative, Monad, MonadTrans)
 
+instance (MonadReader r m) => MonadReader r(IterativeT m) where
+	ask = IterativeT(lift ask)
+instance (MonadWriter r m) => MonadWriter r(IterativeT m) where
+	writer = IterativeT. lift.writer
+instance (MonadState r m) => MonadState r(IterativeT m) where
+	state = IterativeT. lift.state
+
 iterativeStrategy :: (Modality m)
 	=> IterativeT m t
 	-> IterativeT m t
@@ -19,9 +26,14 @@ iterativeStrategy m = IterativeT(ask>>= \depth->
 
 instance (Costly m) => Costly(IterativeT m) where
 	type CostOf (IterativeT m) = CostOf m
-	cost c heuristic = expHoistStrategySearch lift
-		(\m->liftM fst(evalRWST(unIterativeT m) 1 ()))
-		(cost c heuristic)
+	cost c heuristic = lift(IterativeT ask)>>= \depth->
+		expHoistStrategySearch lift
+			(\m->liftM fst(evalRWST(unIterativeT m) depth ()))
+			(cost c heuristic)
+	getCost = lift(IterativeT ask)>>= \depth->
+		expHoistStrategySearch lift
+			(\m->liftM fst(evalRWST(unIterativeT m) depth ()))
+			getCost
 
 _runIterativeT :: (Modality m)
 	=> IterativeT m t

@@ -1,10 +1,10 @@
-{-# LANGUAGE Trustworthy, TypeFamilies #-}
+{-# LANGUAGE Trustworthy, TypeFamilies, FlexibleContexts #-}
 
 -- | The notion of linearized plan is simply a sequence of actions with associated STRIPS attributes.
 --  A linearized plan has structural redundancies corresponding to unordered actions.
 --  This planner exploits these structural redundancies to greatly speed up planning
 --  for problems with few ordering constraints.
-module Daedalus.Plan (Action(..), checkPlan, plan, test, test2) where
+module Daedalus.Plan (Action(..), UserLevelStrategy, checkPlan, plan, test, test2) where
 
 import Data.Monoid
 import Data.List
@@ -13,8 +13,7 @@ import Data.Default
 import Data.Function
 import Daedalus.Cost
 import Daedalus.StrategySearch
-import Control.Monad.Search (Search, runSearch)
-import qualified Control.Monad.Search as S
+import Daedalus.Strategy.AStar
 import Control.Monad.State
 import Control.Monad.Writer
 import Control.Monad.Trans
@@ -42,6 +41,8 @@ instance (Eq s, Default t) => Monoid(Action s t) where
 instance (NFData s, NFData t) => NFData(Action s t) where
 	rnf action = rnf(pre action)`seq`rnf(add action)`seq`rnf(del action)`seq`rnf(token action)
 
+type UserLevelStrategy cost s t = StrategySearchT(AStarT cost(Writer[(Action s t, (cost, cost))])) (Action s t)
+
 hasConflict :: (Eq s) => Action s t -> Action s t -> Bool
 hasConflict a a2 = not$null$intersect(add a) (del a2)
 	++intersect(del a) (add a2)
@@ -65,35 +66,41 @@ cleaned postcondition = catMaybes.snd.mapAccumL(\p a -> let p' = union(p\\add a)
 
 -- prnt x= unsafePerformIO(print x>>return x)
 
-actionRevisionPenalty :: Sum Float
-actionRevisionPenalty = Sum 2
+actionRevisionPenalty :: (Fractional f) => f
+actionRevisionPenalty = 2
 
-costDelayedSum :: (Costly m, CostOf m ~ Sum Float) => [t] -> StrategySearchT m t
+costDelayedSum :: (Costly m, Fractional(CostOf m), Monoid(CostOf m)) => [t] -> StrategySearchT m t
 costDelayedSum (x:xs) = return x <||> (cost actionRevisionPenalty 0>>costDelayedSum xs)
 costDelayedSum [] = mzero
 
-_plan :: (Show s, Show t, Ord s, Ord t, Default t, Costly m, CostOf m ~ Sum Float)
-	=> ([s] -> Search(Sum Float) (Action s t))
+findDutyList m =
+	execWriter
+	$runAStarT
+	$liftM2(,) m getCost
+	>>=tell.return
+
+_plan :: (Ord s, Ord t, Default t, Costly m, Fractional(CostOf m), Bounded(CostOf m), Ord(CostOf m), Monoid(CostOf m))
+	=> ([s] -> UserLevelStrategy(CostOf m) s t)
 	-> [s]
 	-> [s]
 	-> [s]
-	-> [(Sum Float, Action s t)]
-	-> Bool
-	-> WriterT(Sum Float) (StateT[[[Action s t]]] (StrategySearchT m)) [Action s t]
-_plan f precondition postcondition postcondition2 dutyList aheadOfOrderConflict = if null$postcondition2\\precondition then do
+	-> [(Action s t, (CostOf m, CostOf m))]
+	-> WriterT(CostOf m) (StateT[[[Action s t]]] (StrategySearchT m)) [Action s t]
+_plan f precondition postcondition postcondition2 dutyList = if null$postcondition2\\precondition then do
 	otherTracks <- get
 	let st:stack = otherTracks
 	put stack
 	return$!concat st
 	else do
 	otherTracks <- get
-	((c,x):xs, i) <- lift$lift$foldl'(<||>) mzero$
+	((x,cState):xs, i) <- lift$lift$foldl'(<||>) mzero$
 		map return$
-		zip{-costDelayedSum-}(init$tails dutyList) [0,getSum actionRevisionPenalty..]
---	unsafePerformIO(print(c,x))`seq`return()
-	lift$lift$cost c 0
-	lift$lift$cost(Sum i) 0
-	tell(Sum i)
+		zip(init$tails dutyList) [0::Int ..]
+	-- unsafePerformIO(print(c,x))`seq`return()
+	lift$lift$uncurry cost cState
+	let pen = fromIntegral i*actionRevisionPenalty
+	lift$lift$cost pen 0
+	tell pen
 	guard$null$intersect(del x) postcondition
 	guard$not$null$intersect(add x) postcondition2
 	let partitions = unzip.map(breakEnd(hasConflict x)) <$> otherTracks
@@ -103,9 +110,9 @@ _plan f precondition postcondition postcondition2 dutyList aheadOfOrderConflict 
 	let postcondition' = transformPostcondition postcondition(linearizedTracks++[x])
 	let postcondition'' = pre x
 	-- Descend to evaluate a new sub-DAG
-	let dutyList' = runSearch$f postcondition''
-	let aheadOfOrderConflict' = any(not.null.intersect postcondition'.del.snd) dutyList'
-	(ls, penalty) <- lift$runWriterT$_plan f precondition postcondition' postcondition'' dutyList' aheadOfOrderConflict'
+	let dutyList' = findDutyList$f postcondition''
+	-- let aheadOfOrderConflict' = any(not.null.intersect postcondition'.del.snd) dutyList'
+	(ls, penalty) <- lift$runWriterT$_plan f precondition postcondition' postcondition'' dutyList'
 	lift$lift$cost(negate penalty) 0 -- Undo the penalty
 	-- Proceed to evaluate other components
 	let finalTrack = x:ls
@@ -120,8 +127,11 @@ _plan f precondition postcondition postcondition2 dutyList aheadOfOrderConflict 
 	-- It determines whether or not to add another DAG layer by whether induced dependencies were found.
 	-- If they were not found, it proceeds with the remaining duty list so that actions are considered
 	-- strictly in order of generation by 'f'.
-	let dutyList' = if null linearizedTracks && not aheadOfOrderConflict then xs else runSearch$f postcondition'''
-	liftM(linearizedTracks++)$_plan f precondition(transformPostcondition postcondition linearizedTracks\\transformPostconditionForward2 tracks) postcondition''' dutyList' aheadOfOrderConflict
+	let dutyList' = if null linearizedTracks then
+			xs
+		else
+			findDutyList$f postcondition'''
+	liftM(linearizedTracks++)$_plan f precondition(transformPostcondition postcondition linearizedTracks\\transformPostconditionForward2 tracks) postcondition''' dutyList'
 
 checkPlan :: (Eq s) => [Action s t] -> [s] -> [s] -> Bool
 checkPlan plan precondition postcondition =
@@ -129,10 +139,14 @@ checkPlan plan precondition postcondition =
 	(preRequired, bool) = foldl'(\(p, bool) a -> (union(p\\add a) (pre a), bool&&null(intersect p(del a)))) (postcondition, True) plan in
 	bool && null(preRequired\\precondition)
 
-plan :: (Show s, Show t, Ord s, Ord t, Default t, Costly m, CostOf m ~ Sum Float) => ([s] -> Search(Sum Float) (Action s t)) -> [s] -> [s] -> StrategySearchT m[Action s t]
+plan :: (Ord s, Ord t, Default t, Costly m, Fractional(CostOf m), Bounded(CostOf m), Ord(CostOf m), Monoid(CostOf m))
+	=> ([s] -> UserLevelStrategy(CostOf m) s t)
+	-> [s]
+	-> [s]
+	-> StrategySearchT m[Action s t]
 plan f pre post = evalStateT(liftM fst$runWriterT$do
-	let dutyList = runSearch$f post
-	ls <- _plan f pre post post dutyList False
+	let dutyList = findDutyList$f post
+	ls <- _plan f pre post post dutyList
 	otherTracks <- get
 	let finalPlan = cleaned post$concat(concat otherTracks) ++ ls
 	-- guard$checkPlan finalPlan pre post
@@ -141,8 +155,8 @@ plan f pre post = evalStateT(liftM fst$runWriterT$do
 
 --------------------------------
 
-cost'' :: Float -> Float -> Search(Sum Float) ()
-cost'' x x2 = S.cost(Sum x) (Sum x2)
+cost'' :: (Costly m, CostOf m ~ Sum Float) => Float -> Float -> StrategySearchT m ()
+cost'' x x2 = cost(Sum x) (Sum x2)
 
 heuristic s =
 	let
@@ -156,30 +170,32 @@ heuristic s =
 
 succ' = show.(succ::Int->Int).read
 pred' = show.(pred::Int->Int).read
+guard' n = guard(m>=1&&m<=5) where
+	m = read n::Int
 
-goLeft s = case msum$map(stripPrefix "x") s of
-	Just n-> heuristic s>>return(Action['x':succ' n] ['x':n] ['x':succ' n] "goleft")
+goLeft s = case msum(map(stripPrefix "x") s) <|> msum(map(stripPrefix "formerlyx") s) of
+	Just n-> guard' n>>heuristic s>>return(Action['x':succ' n] ['x':n] [] "goleft")
 	Nothing -> mzero
 
-goRight s = case msum$map(stripPrefix "x") s of
-	Just n-> heuristic s>>return(Action['x':pred' n] ['x':n] ['x':pred' n] "goright")
+goRight s = case msum(map(stripPrefix "x") s)  <|> msum(map(stripPrefix "formerlyx") s) of
+	Just n-> guard' n>>heuristic s>>return(Action['x':pred' n] ['x':n] [] "goright")
 	Nothing -> mzero
 
-goUp s = case msum$map(stripPrefix "y") s of
-	Just n-> heuristic s>>return(Action['y':succ' n] ['y':n] ['y':succ' n] "goup")
+goUp s = case msum(map(stripPrefix "y") s)  <|> msum(map(stripPrefix "formerlyy") s) of
+	Just n-> guard' n>>heuristic s>>return(Action['y':succ' n] ['y':n] [] "goup")
 	Nothing -> mzero
 
-goDown s = case msum$map(stripPrefix "y") s of
-	Just n-> heuristic s>>return(Action['y':pred' n] ['y':n] ['y':pred' n] "godown")
+goDown s = case msum(map(stripPrefix "y") s)  <|> msum(map(stripPrefix "formerlyy") s) of
+	Just n-> guard' n>>heuristic s>>return(Action['y':pred' n] ['y':n] [] "godown")
 	Nothing -> mzero
 
 takeKey s = if "havekey" `elem` s then
-		cost''(-5) 0>>return(Action["x4","y4"] ["havekey"] [] "takekey")
+		cost''(-2) 0>>return(Action["x4","y4"] ["havekey"] [] "takekey")
 	else
 		mzero
 
 goToExit s = if "exit" `elem` s then
-		heuristic s>>return(Action["x5","y5"] ["exit"] [] "gotoexit")
+		cost''(-5) 0>>return(Action["x5","y5","havekey"] ["exit"] [] "gotoexit")
 	else
 		mzero
 

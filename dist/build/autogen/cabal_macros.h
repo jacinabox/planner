@@ -35,13 +35,6 @@
   (major1) == 1 && (major2) <  0 || \
   (major1) == 1 && (major2) == 0 && (minor) <= 9)
 
-/* package monad-dijkstra-0.1.1.0 */
-#define VERSION_monad_dijkstra "0.1.1.0"
-#define MIN_VERSION_monad_dijkstra(major1,major2,minor) (\
-  (major1) <  0 || \
-  (major1) == 0 && (major2) <  1 || \
-  (major1) == 0 && (major2) == 1 && (minor) <= 1)
-
 /* package mtl-2.2.1 */
 #define VERSION_mtl "2.2.1"
 #define MIN_VERSION_mtl(major1,major2,minor) (\
@@ -112,7 +105,7 @@
   (major1) == 2 && (major2) <  25 || \
   (major1) == 2 && (major2) == 25 && (minor) <= 0)
 
-#define CURRENT_COMPONENT_ID "daedalus-0.1.0.0-GPXyxucRabWHuoYh5e6wvA"
+#define CURRENT_COMPONENT_ID "daedalus-0.1.0.0-F3OKWTFeFimLTFTQsoGmU3"
 
-#define CURRENT_PACKAGE_KEY "GPXyxucRabWHuoYh5e6wvA"
+#define CURRENT_PACKAGE_KEY "F3OKWTFeFimLTFTQsoGmU3"
 

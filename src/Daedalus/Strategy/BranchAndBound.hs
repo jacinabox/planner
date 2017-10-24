@@ -1,10 +1,11 @@
-{-# LANGUAGE TypeFamilies, GeneralizedNewtypeDeriving, DeriveFunctor #-}
+{-# LANGUAGE TypeFamilies, GeneralizedNewtypeDeriving, DeriveFunctor, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, StandaloneDeriving, UndecidableInstances #-}
 
 module Daedalus.Strategy.BranchAndBound (BranchT, branchAndBoundStrategy, branchAndBoundCallback, runBranchT) where
 
 import Data.Monoid
 import Control.Monad.Reader
 import Control.Monad.Cont
+import Control.Monad.Writer
 import Control.Monad.State
 import Control.Monad.Trans
 import Control.Monad.Morph
@@ -41,6 +42,12 @@ instance (Modality m, Ord c, Monoid c) => Costly(BranchT c m) where
 			return x)
 			-- Store the updated cost.
 			(lift(BranchT(put$!branchState { costSoFar = c' })))
+	getCost = liftM(\state->(costSoFar state,error"BranchAndBound: heuristic un-represented")) (lift(BranchT get))
+
+deriving instance (MonadReader r m, Monoid c, Ord c) => MonadReader r(BranchT c m)
+deriving instance (MonadWriter r m, Monoid c, Ord c) => MonadWriter r(BranchT c m)
+instance (MonadState r m, Monoid c, Ord c) => MonadState r(BranchT c m) where
+	state = BranchT. lift.state
 
 branchAndBoundStrategy :: (Modality m, Ord c, Monoid c)
 	=> SearchT(BranchT c m) t
