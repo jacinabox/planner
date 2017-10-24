@@ -66,7 +66,7 @@ cleaned postcondition = catMaybes.snd.mapAccumL(\p a -> let p' = union(p\\add a)
 -- prnt x= unsafePerformIO(print x>>return x)
 
 actionRevisionPenalty :: Sum Float
-actionRevisionPenalty = 2
+actionRevisionPenalty = Sum 2
 
 costDelayedSum :: (Costly m, CostOf m ~ Sum Float) => [t] -> StrategySearchT m t
 costDelayedSum (x:xs) = return x <||> (cost actionRevisionPenalty 0>>costDelayedSum xs)
@@ -78,16 +78,22 @@ _plan :: (Show s, Show t, Ord s, Ord t, Default t, Costly m, CostOf m ~ Sum Floa
 	-> [s]
 	-> [s]
 	-> [(Sum Float, Action s t)]
+	-> Bool
 	-> WriterT(Sum Float) (StateT[[[Action s t]]] (StrategySearchT m)) [Action s t]
-_plan f precondition postcondition postcondition2 dutyList = if null$postcondition2\\precondition then do
+_plan f precondition postcondition postcondition2 dutyList aheadOfOrderConflict = if null$postcondition2\\precondition then do
 	otherTracks <- get
 	let st:stack = otherTracks
 	put stack
 	return$!concat st
 	else do
 	otherTracks <- get
-	(c,x):xs <- lift$lift$costDelayedSum$init$tails dutyList
+	((c,x):xs, i) <- lift$lift$foldl'(<||>) mzero$
+		map return$
+		zip{-costDelayedSum-}(init$tails dutyList) [0,getSum actionRevisionPenalty..]
+--	unsafePerformIO(print(c,x))`seq`return()
 	lift$lift$cost c 0
+	lift$lift$cost(Sum i) 0
+	tell(Sum i)
 	guard$null$intersect(del x) postcondition
 	guard$not$null$intersect(add x) postcondition2
 	let partitions = unzip.map(breakEnd(hasConflict x)) <$> otherTracks
@@ -98,7 +104,8 @@ _plan f precondition postcondition postcondition2 dutyList = if null$postconditi
 	let postcondition'' = pre x
 	-- Descend to evaluate a new sub-DAG
 	let dutyList' = runSearch$f postcondition''
-	(ls, penalty) <- lift$runWriterT$_plan f precondition postcondition' postcondition'' dutyList'
+	let aheadOfOrderConflict' = any(not.null.intersect postcondition'.del.snd) dutyList'
+	(ls, penalty) <- lift$runWriterT$_plan f precondition postcondition' postcondition'' dutyList' aheadOfOrderConflict'
 	lift$lift$cost(negate penalty) 0 -- Undo the penalty
 	-- Proceed to evaluate other components
 	let finalTrack = x:ls
@@ -113,8 +120,8 @@ _plan f precondition postcondition postcondition2 dutyList = if null$postconditi
 	-- It determines whether or not to add another DAG layer by whether induced dependencies were found.
 	-- If they were not found, it proceeds with the remaining duty list so that actions are considered
 	-- strictly in order of generation by 'f'.
-	let dutyList' = if null linearizedTracks then xs else runSearch$f postcondition'''
-	liftM(linearizedTracks++)$_plan f precondition(transformPostcondition postcondition linearizedTracks\\transformPostconditionForward2 tracks) postcondition''' dutyList'
+	let dutyList' = if null linearizedTracks && not aheadOfOrderConflict then xs else runSearch$f postcondition'''
+	liftM(linearizedTracks++)$_plan f precondition(transformPostcondition postcondition linearizedTracks\\transformPostconditionForward2 tracks) postcondition''' dutyList' aheadOfOrderConflict
 
 checkPlan :: (Eq s) => [Action s t] -> [s] -> [s] -> Bool
 checkPlan plan precondition postcondition =
@@ -125,7 +132,7 @@ checkPlan plan precondition postcondition =
 plan :: (Show s, Show t, Ord s, Ord t, Default t, Costly m, CostOf m ~ Sum Float) => ([s] -> Search(Sum Float) (Action s t)) -> [s] -> [s] -> StrategySearchT m[Action s t]
 plan f pre post = evalStateT(liftM fst$runWriterT$do
 	let dutyList = runSearch$f post
-	ls <- _plan f pre post post dutyList
+	ls <- _plan f pre post post dutyList False
 	otherTracks <- get
 	let finalPlan = cleaned post$concat(concat otherTracks) ++ ls
 	-- guard$checkPlan finalPlan pre post
@@ -145,7 +152,7 @@ heuristic s =
 	y = case msum$map(stripPrefix "y") s of
 		Just n->fromIntegral(read n::Int)
 		Nothing->10 in
-	cost'' 1(2*(abs(x-1)+abs(y-1))+abs(x-4)+abs(y-5))
+	cost'' 1(abs(x-3)+abs(y-3))
 
 succ' = show.(succ::Int->Int).read
 pred' = show.(pred::Int->Int).read
@@ -167,19 +174,22 @@ goDown s = case msum$map(stripPrefix "y") s of
 	Nothing -> mzero
 
 takeKey s = if "havekey" `elem` s then
-		heuristic s>>return(Action["x4","y5"] ["havekey"] [] "takekey")
+		cost''(-5) 0>>return(Action["x4","y4"] ["havekey"] [] "takekey")
 	else
 		mzero
 
 goToExit s = if "exit" `elem` s then
-		heuristic s>>return(Action["x5","y6"] ["exit"] [] "gotoexit")
+		heuristic s>>return(Action["x5","y5"] ["exit"] [] "gotoexit")
 	else
 		mzero
 
-acts s = msum[goLeft s, goRight s, goUp s, goDown s, takeKey s, goToExit s]
+acts s = msum[takeKey s,goToExit s,goLeft s,goRight s,goUp s,goDown s]
 
 test :: (Costly m, CostOf m ~ Sum Float) => StrategySearchT m[Action String String]
-test = plan acts ["x1","y1"] ["exit"]
+test = plan acts ["x1","y1"] ["exit"]-- >>= \acts->
+{-	guard(token(last acts) == "start")>>
+	guard(all((/="start").token) (init acts))>>
+	return acts-}
 
 --------------------------------
 
