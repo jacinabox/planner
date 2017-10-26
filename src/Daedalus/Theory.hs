@@ -58,7 +58,7 @@ A partial semantics
 * Equations for 'addStrategy'
 
   @
-  addStrategy f(addStrategy f2 m) = addStrategy(f2.f) m
+  addStrategy f(addStrategy f2 m) = addStrategy(f.f2) m
   strategySearchT m>>=addStrategy f.g = addStrategy f(strategySearchT m>>=g)
   @
 

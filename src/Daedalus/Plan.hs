@@ -45,8 +45,6 @@ type UserLevelStrategy cost s t = StrategySearchT(AStarT cost(Writer[(Action s t
 
 hasConflict :: (Eq s) => Action s t -> Action s t -> Bool
 hasConflict a a2 = not$null$intersect(add a) (del a2)
-	++intersect(del a) (add a2)
-	++intersect(pre a) (del a2)
 	++intersect(del a) (pre a2)
 
 transformPostcondition :: (Eq s, Default t) => [s] -> [Action s t] -> [s]
@@ -79,7 +77,7 @@ findDutyList m =
 	$liftM2(,) m getCost
 	>>=tell.return
 
-_plan :: (Ord s, Ord t, Default t, Costly m, Fractional(CostOf m), Bounded(CostOf m), Ord(CostOf m), Monoid(CostOf m))
+_plan :: (Show s, Show t, Ord s, Ord t, Default t, Costly m, Fractional(CostOf m), Bounded(CostOf m), Ord(CostOf m), Monoid(CostOf m))
 	=> ([s] -> UserLevelStrategy(CostOf m) s t)
 	-> [s]
 	-> [s]
@@ -96,23 +94,31 @@ _plan f precondition postcondition postcondition2 dutyList = if null$postconditi
 	((x,cState):xs, i) <- lift$lift$foldl'(<||>) mzero$
 		map return$
 		zip(init$tails dutyList) [0::Int ..]
-	-- unsafePerformIO(print(c,x))`seq`return()
+	-- unsafePerformIO(print x)`seq`return()
 	lift$lift$uncurry cost cState
 	let pen = fromIntegral i*actionRevisionPenalty
 	lift$lift$cost pen 0
 	tell pen
 	guard$null$intersect(del x) postcondition
 	guard$not$null$intersect(add x) postcondition2
-	let partitions = unzip.map(breakEnd(hasConflict x)) <$> otherTracks
+	let partitions = unzip.map(breakEnd(`hasConflict` x)) <$> otherTracks
 	let conf = fst <$> partitions
-	put$![]:(snd <$> partitions)
+	let partitions2 = unzip.map(break(hasConflict x)) <$> conf
+	let conf2 = snd <$> partitions2
+	put$![]:(fst <$> partitions2)
 	let linearizedTracks = concat$concat conf
+	let linearizedTracks2 = concat$concat conf2
 	let postcondition' = transformPostcondition postcondition(linearizedTracks++[x])
-	let postcondition'' = pre x
+	let dutyList' = findDutyList$f(pre x)
+	let aheadOfOrderConflict = any(not.null.intersect(pre x).del.fst) dutyList'
+	let postcondition'' = {-if aheadOfOrderConflict then
+		postcondition'
+		else-}
+		pre x
+	-- let postcondition'' = pre x
 	-- Descend to evaluate a new sub-DAG
-	let dutyList' = findDutyList$f postcondition''
-	-- let aheadOfOrderConflict' = any(not.null.intersect postcondition'.del.snd) dutyList'
 	(ls, penalty) <- lift$runWriterT$_plan f precondition postcondition' postcondition'' dutyList'
+	-- guard$checkPlan ls precondition postcondition''
 	lift$lift$cost(negate penalty) 0 -- Undo the penalty
 	-- Proceed to evaluate other components
 	let finalTrack = x:ls
@@ -131,7 +137,7 @@ _plan f precondition postcondition postcondition2 dutyList = if null$postconditi
 			xs
 		else
 			findDutyList$f postcondition'''
-	liftM(linearizedTracks++)$_plan f precondition(transformPostcondition postcondition linearizedTracks\\transformPostconditionForward2 tracks) postcondition''' dutyList'
+	liftM((++linearizedTracks2).(linearizedTracks++))$_plan f precondition(transformPostcondition postcondition linearizedTracks\\transformPostconditionForward2 tracks) postcondition''' dutyList'
 
 checkPlan :: (Eq s) => [Action s t] -> [s] -> [s] -> Bool
 checkPlan plan precondition postcondition =
@@ -139,7 +145,7 @@ checkPlan plan precondition postcondition =
 	(preRequired, bool) = foldl'(\(p, bool) a -> (union(p\\add a) (pre a), bool&&null(intersect p(del a)))) (postcondition, True) plan in
 	bool && null(preRequired\\precondition)
 
-plan :: (Ord s, Ord t, Default t, Costly m, Fractional(CostOf m), Bounded(CostOf m), Ord(CostOf m), Monoid(CostOf m))
+plan :: (Show s, Show t, Ord s, Ord t, Default t, Costly m, Fractional(CostOf m), Bounded(CostOf m), Ord(CostOf m), Monoid(CostOf m))
 	=> ([s] -> UserLevelStrategy(CostOf m) s t)
 	-> [s]
 	-> [s]
@@ -174,23 +180,23 @@ guard' n = guard(m>=1&&m<=5) where
 	m = read n::Int
 
 goLeft s = case msum(map(stripPrefix "x") s) <|> msum(map(stripPrefix "formerlyx") s) of
-	Just n-> guard' n>>heuristic s>>return(Action['x':succ' n] ['x':n] [] "goleft")
+	Just n-> guard' n>>heuristic s>>return(Action['x':succ' n] ['x':n] ['x':succ' n] "goleft")
 	Nothing -> mzero
 
 goRight s = case msum(map(stripPrefix "x") s)  <|> msum(map(stripPrefix "formerlyx") s) of
-	Just n-> guard' n>>heuristic s>>return(Action['x':pred' n] ['x':n] [] "goright")
+	Just n-> guard' n>>heuristic s>>return(Action['x':pred' n] ['x':n] ['x':pred' n] "goright")
 	Nothing -> mzero
 
 goUp s = case msum(map(stripPrefix "y") s)  <|> msum(map(stripPrefix "formerlyy") s) of
-	Just n-> guard' n>>heuristic s>>return(Action['y':succ' n] ['y':n] [] "goup")
+	Just n-> guard' n>>heuristic s>>return(Action['y':succ' n] ['y':n] ['y':succ' n] "goup")
 	Nothing -> mzero
 
 goDown s = case msum(map(stripPrefix "y") s)  <|> msum(map(stripPrefix "formerlyy") s) of
-	Just n-> guard' n>>heuristic s>>return(Action['y':pred' n] ['y':n] [] "godown")
+	Just n-> guard' n>>heuristic s>>return(Action['y':pred' n] ['y':n] ['y':pred' n] "godown")
 	Nothing -> mzero
 
 takeKey s = if "havekey" `elem` s then
-		cost''(-2) 0>>return(Action["x4","y4"] ["havekey"] [] "takekey")
+		cost'' 1 0>>heuristic s>>return(Action["x4","y4"] ["havekey"] [] "takekey")
 	else
 		mzero
 

@@ -67,7 +67,7 @@ addStrategy :: (Modality m)
 	=> (forall u. SearchT m u->SearchT m u)
 	-> StrategySearchT m t
 	-> StrategySearchT m t
-addStrategy f = StrategySearchT. local(Strategy f<>).unStrategySearchT
+addStrategy f = StrategySearchT. local(<>Strategy f).unStrategySearchT
 
 -- | A basic eliminator into the 'SearchT' modality transformer.
 runStrategySearchT :: (Modality m)

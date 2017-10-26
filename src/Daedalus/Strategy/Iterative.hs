@@ -53,4 +53,4 @@ runIterativeT :: (Modality m)
 	=> StrategySearchT(IterativeT m) t
 	-> StrategySearchT m t
 runIterativeT = expHoistStrategySearch _runIterativeT lift.
-	addStrategy(techExpHoistSearchT iterativeStrategy id)
+	addStrategy(techExpHoistSearchT id iterativeStrategy)
