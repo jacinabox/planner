@@ -45,7 +45,9 @@ type UserLevelStrategy cost s t = StrategySearchT(AStarT cost(Writer[(Action s t
 
 hasConflict :: (Eq s) => Action s t -> Action s t -> Bool
 hasConflict a a2 = not$null$intersect(add a) (del a2)
+	++intersect(del a) (add a2)
 	++intersect(del a) (pre a2)
+	++intersect(pre a) (del a2)
 
 transformPostcondition :: (Eq s, Default t) => [s] -> [Action s t] -> [s]
 transformPostcondition post ls = union(post\\add a) (pre a) where
@@ -88,6 +90,7 @@ _plan f precondition postcondition postcondition2 dutyList = if null$postconditi
 	otherTracks <- get
 	let st:stack = otherTracks
 	put stack
+	-- unsafePerformIO(print(concat st))`seq`return()
 	return$!concat st
 	else do
 	otherTracks <- get
@@ -101,23 +104,31 @@ _plan f precondition postcondition postcondition2 dutyList = if null$postconditi
 	tell pen
 	guard$null$intersect(del x) postcondition
 	guard$not$null$intersect(add x) postcondition2
-	let partitions = unzip.map(breakEnd(`hasConflict` x)) <$> otherTracks
-	let conf = fst <$> partitions
-	let partitions2 = unzip.map(break(hasConflict x)) <$> conf
-	let conf2 = snd <$> partitions2
-	put$![]:(fst <$> partitions2)
-	let linearizedTracks = concat$concat conf
-	let linearizedTracks2 = concat$concat conf2
+	bool <- lift$lift$return True <||> return False
+	-- Required to guess the ordering in case of a conflict.
+	(linearizedTracks,linearizedTracks2) <- if bool then do
+		let partitions = unzip.map(breakEnd(hasConflict x)) <$> otherTracks
+		let conf = fst <$> partitions
+		let linearizedTracks = concat$concat conf
+		put$![]:(snd <$> partitions)
+		return(linearizedTracks,[])
+		else do
+		let partitions = unzip.map(break(hasConflict x)) <$> otherTracks
+		let conf = snd <$> partitions
+		put$![]:(fst <$> partitions)
+		let linearizedTracks2 = concat$concat conf
+		guard$not$null linearizedTracks2
+		return([],linearizedTracks2)
+	-- unsafePerformIO(print(token <$> linearizedTracks,token <$> linearizedTracks2))`seq`return()
 	let postcondition' = transformPostcondition postcondition(linearizedTracks++[x])
 	let dutyList' = findDutyList$f(pre x)
 	let aheadOfOrderConflict = any(not.null.intersect(pre x).del.fst) dutyList'
-	let postcondition'' = {-if aheadOfOrderConflict then
+	let postcondition'' = if aheadOfOrderConflict then
 		postcondition'
-		else-}
+		else
 		pre x
-	-- let postcondition'' = pre x
 	-- Descend to evaluate a new sub-DAG
-	(ls, penalty) <- lift$runWriterT$_plan f precondition postcondition' postcondition'' dutyList'
+	(ls, penalty) <- lift$runWriterT$_plan f(union precondition(transformPostconditionForward linearizedTracks2)) postcondition' postcondition'' dutyList'
 	-- guard$checkPlan ls precondition postcondition''
 	lift$lift$cost(negate penalty) 0 -- Undo the penalty
 	-- Proceed to evaluate other components
@@ -196,7 +207,7 @@ goDown s = case msum(map(stripPrefix "y") s)  <|> msum(map(stripPrefix "formerly
 	Nothing -> mzero
 
 takeKey s = if "havekey" `elem` s then
-		cost'' 1 0>>heuristic s>>return(Action["x4","y4"] ["havekey"] [] "takekey")
+		heuristic s>>return(Action["x4","y4"] ["havekey"] [] "takekey")
 	else
 		mzero
 
