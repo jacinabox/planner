@@ -1,0 +1,11 @@
+Initial state: x(o()),y(o())
+Goal state: x(s(s(s(s(s(o())))))),y(o())
+Actions:
+
+right()
+Preconditions: x(N)
+Postconditions: x(s(N))
+
+left()
+Preconditions: x(s(N))
+Postconditions: x(N)

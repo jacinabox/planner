@@ -1,0 +1,17 @@
+Initial state: on(b(),table()),on(a(),table()),on(c(),a()),clear(b()),clear(c()),clear(table())
+Goal state: on(c(),table()),on(a(),b()),on(b(),c()),clear(a()),clear(table())
+Actions:
+
+moveblock()
+Preconditions: clear(SRC),clear(DEST),on(SRC,SRC2)
+Postconditions: on(SRC,DEST),clear(SRC2)
+Deletions: clear(DEST),on(SRC,SRC2)
+
+movetotable()
+Preconditions: clear(SRC),on(SRC,SRC2)
+Postconditions: on(SRC,table()),clear(SRC2)
+Deletions: on(SRC,SRC2)
+
+dummyaction()
+Preconditions: clear(table())
+Postconditions: clear(table())
