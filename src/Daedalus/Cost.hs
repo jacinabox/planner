@@ -1,62 +1,57 @@
 {-# LANGUAGE TypeFamilies, FlexibleContexts, FlexibleInstances, MultiParamTypeClasses, UndecidableInstances, GeneralizedNewtypeDeriving, StandaloneDeriving #-}
 
-module Daedalus.Cost (Costly(..)) where
-
-import Control.Monad.Writer
+module Daedalus.Cost (Costly(..), cost, getCost) where
 import Control.Monad.Reader
-import Control.Monad.State
-import qualified Control.Monad.State.Strict as S
-import Control.Monad.Error
-import Control.Monad.Identity
+import Control.Monad.Writer
+import qualified Control.Monad.State as L
+import Control.Monad.State.Strict
 import Control.Monad.Trans
+import Control.Monad.Morph
 import Daedalus.SearchT
 import Daedalus.StrategySearch
-import System.IO.Unsafe
 import Data.IORef
+import Data.Monoid
 
 -- | A generic concept of cost functions and heuristic for modalities, adapted from the function of the same
 -- name in monad-dijkstra package.
-class (Modality m) => Costly m where
+class (Modality m, Monoid(CostOf m), Bounded(CostOf m)) => Costly m where
 	type CostOf m :: *
-	cost :: CostOf m -> CostOf m -> StrategySearchT m()
-	getCost :: StrategySearchT m(CostOf m,CostOf m)
+	_cost :: CostOf m -> CostOf m -> SearchT m()
+	_getCost :: SearchT m(CostOf m,CostOf m)
 
 -----------------------------------------------
 
--- A degenerate case for 'cost' has no costs recorded.
-instance Costly Identity where
-	type CostOf Identity = ()
-	{-# INLINE cost #-}
-	cost _ _ = return()
-	{-# INLINE getCost #-}
-	getCost = return$!((),())
-
-cheesyWriterHoist :: (Monoid r, Modality m) => StrategySearchT m t
-	-> StrategySearchT(WriterT r m) t
-cheesyWriterHoist n = expHoistStrategySearch lift
-	(\m->runWriterT m>>= \(x,w)->return$!unsafePerformIO(writeIORef ref w>>return x))
-	n>>= \x->
-	lift(tell$!unsafePerformIO$readIORef ref)>>
-	return x
-	where
-	{-# NOINLINE ref #-}
-	ref = unsafePerformIO(newIORef mempty)
-
--- Instances that pass costs through.
-instance (Monoid r, Costly m) => Costly(WriterT r m) where
-	type CostOf(WriterT r m) = CostOf m
-	{-# INLINE cost #-}
-	cost c = cheesyWriterHoist.cost c
-	{-# INLINE getCost #-}
-	getCost = cheesyWriterHoist getCost
+instance (Monoid w, Monad m) => Costly(WriterT w m) where
+	type CostOf(WriterT w m) = ()
+	_cost _ _ = return()
+	_getCost = return((),())
 
 instance (Costly m) => Costly(ReaderT r m) where
 	type CostOf(ReaderT r m) = CostOf m
-	{-# INLINE cost #-}
-	cost c h = lift ask>>= \r->
-		expHoistStrategySearch lift(`runReaderT` r) (cost c h)
-	getCost = lift ask>>= \r->
-		expHoistStrategySearch lift(`runReaderT` r) getCost
+	{-# INLINE _cost #-}
+	_cost c h = lift ask>>= \r->
+		techExpHoistSearchT lift(`runReaderT` r) (_cost c h)
+	{-# INLINE _getCost #-}
+	_getCost = lift ask>>= \r->
+		techExpHoistSearchT lift(`runReaderT` r) _getCost
+
+instance (Costly m) => Costly(L.StateT s m) where
+	type CostOf(L.StateT s m) = CostOf m
+	{-# INLINE _cost #-}
+	_cost c h = lift get>>= \s->
+		techExpHoistSearchT lift(`L.evalStateT` s) (_cost c h)
+	{-# INLINE _getCost #-}
+	_getCost = lift get>>= \s->
+		techExpHoistSearchT lift(`L.evalStateT` s) _getCost
+
+instance (Costly m) => Costly(StateT s m) where
+	type CostOf(StateT s m) = CostOf m
+	{-# INLINE _cost #-}
+	_cost c h = lift get>>= \s->
+		techExpHoistSearchT lift(`evalStateT` s) (_cost c h)
+	{-# INLINE _getCost #-}
+	_getCost = lift get>>= \s->
+		techExpHoistSearchT lift(`evalStateT` s) _getCost
 
 instance (MonadWriter r m) => MonadWriter r(SearchT m) where
 	writer = lift.writer
@@ -64,27 +59,10 @@ instance (MonadWriter r m) => MonadWriter r(SearchT m) where
 instance (MonadReader r m) => MonadReader r(SearchT m) where
 	ask = lift ask
 
-instance (MonadWriter r m) => MonadWriter r(StrategySearchT m) where
-	writer = lift.writer
-instance (MonadReader r m) => MonadReader r(StrategySearchT m) where
-	ask = lift ask
-{-
-instance (Costly m) => Costly(StateT r m) where
-	type CostOf(StateT r m) = CostOf m
-	{-# INLINE cost #-}
-	cost c = hoist lift.cost c
-	getCost = hoist lift getCost
-instance (Costly m) => Costly(S.StateT r m) where
-	type CostOf(S.StateT r m) = CostOf m
-	{-# INLINE cost #-}
-	cost c = hoist lift.cost c
-	getCost = hoist lift getCost
+cost c = strategySearchT._cost c
 
-instance (Costly m) => Costly(ErrorT r m) where
-	type CostOf(ErrorT r m) = CostOf m
-	{-# INLINE cost #-}
-	cost c = hoist lift.cost c
-	getCost = hoist lift getCost-}
+getCost :: (Costly m) => StrategySearchT m(CostOf m,CostOf m)
+getCost = strategySearchT _getCost
 
 -----------------------------------------------
 -- Some orphan instances
