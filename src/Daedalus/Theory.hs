@@ -52,14 +52,14 @@ A partial semantics
 * Idempotence of strategies (which has to be maintained on a strategy-by-strategy basis):
 
   @
-  applyStrategy(applyStrategy m) = applyStrategy m
+  applyStrategy>>applyStrategy = applyStrategy
   @
 
 * Equations for 'addStrategy'
 
   @
-  addStrategy f(addStrategy f2 m) = addStrategy(f.f2) m
-  strategySearchT m>>=addStrategy f.g = addStrategy f(strategySearchT m>>=g)
+  addStrategy m(addStrategy m2 m3) = addStrategy(m>>m2) m3
+  strategySearchT m>>=addStrategy m2.g = addStrategy m2(strategySearchT m>>=g)
   @
 
 ------------------------------------

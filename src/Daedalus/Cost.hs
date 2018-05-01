@@ -8,7 +8,6 @@ import Control.Monad.State.Strict
 import Control.Monad.Trans
 import Control.Monad.Morph
 import Daedalus.SearchT
-import Daedalus.StrategySearch
 import Data.IORef
 import Data.Monoid
 
@@ -30,28 +29,28 @@ instance (Costly m) => Costly(ReaderT r m) where
 	type CostOf(ReaderT r m) = CostOf m
 	{-# INLINE _cost #-}
 	_cost c h = lift ask>>= \r->
-		techExpHoistSearchT lift(`runReaderT` r) (_cost c h)
+		techExpHoistSearchT(hoist lift) (hoist(`runReaderT` r)) (_cost c h)
 	{-# INLINE _getCost #-}
 	_getCost = lift ask>>= \r->
-		techExpHoistSearchT lift(`runReaderT` r) _getCost
+		techExpHoistSearchT(hoist lift) (hoist(`runReaderT` r)) _getCost
 
 instance (Costly m) => Costly(L.StateT s m) where
 	type CostOf(L.StateT s m) = CostOf m
 	{-# INLINE _cost #-}
 	_cost c h = lift get>>= \s->
-		techExpHoistSearchT lift(`L.evalStateT` s) (_cost c h)
+		techExpHoistSearchT(hoist lift) (hoist(`L.evalStateT` s)) (_cost c h)
 	{-# INLINE _getCost #-}
 	_getCost = lift get>>= \s->
-		techExpHoistSearchT lift(`L.evalStateT` s) _getCost
+		techExpHoistSearchT(hoist lift) (hoist(`L.evalStateT` s)) _getCost
 
 instance (Costly m) => Costly(StateT s m) where
 	type CostOf(StateT s m) = CostOf m
 	{-# INLINE _cost #-}
 	_cost c h = lift get>>= \s->
-		techExpHoistSearchT lift(`evalStateT` s) (_cost c h)
+		techExpHoistSearchT(hoist lift) (hoist(`evalStateT` s)) (_cost c h)
 	{-# INLINE _getCost #-}
 	_getCost = lift get>>= \s->
-		techExpHoistSearchT lift(`evalStateT` s) _getCost
+		techExpHoistSearchT(hoist lift) (hoist(`evalStateT` s)) _getCost
 
 instance (MonadWriter r m) => MonadWriter r(SearchT m) where
 	writer = lift.writer
@@ -59,10 +58,10 @@ instance (MonadWriter r m) => MonadWriter r(SearchT m) where
 instance (MonadReader r m) => MonadReader r(SearchT m) where
 	ask = lift ask
 
-cost c = strategySearchT._cost c
+cost c = _cost c
 
-getCost :: (Costly m) => StrategySearchT m(CostOf m,CostOf m)
-getCost = strategySearchT _getCost
+getCost :: (Costly m) => SearchT m(CostOf m,CostOf m)
+getCost = _getCost
 
 -----------------------------------------------
 -- Some orphan instances

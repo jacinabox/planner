@@ -1,0 +1,67 @@
+{-# LANGUAGE TypeFamilies, FlexibleContexts, FlexibleInstances, MultiParamTypeClasses, UndecidableInstances, GeneralizedNewtypeDeriving, StandaloneDeriving #-}
+
+module Daedalus.Cost (Costly(..), cost, getCost) where
+
+import Control.Monad.Writer
+import Control.Monad.Reader
+import Control.Monad.State
+import qualified Control.Monad.State.Strict as S
+import Control.Monad.Error
+import Control.Monad.Identity
+import Control.Monad.Trans
+import Daedalus.SearchT
+import Daedalus.StrategySearch
+import System.IO.Unsafe
+import Data.IORef
+import Data.Monoid
+
+-- | A generic concept of cost functions and heuristic for modalities, adapted from the function of the same
+-- name in monad-dijkstra package.
+class (Modality m, Monoid(CostOf m), Bounded(CostOf m)) => Costly m where
+	type CostOf m :: *
+	_cost :: CostOf m -> CostOf m -> SearchT m()
+	_getCost :: SearchT m(CostOf m,CostOf m)
+
+-----------------------------------------------
+
+instance (Costly m) => Costly(ReaderT r m) where
+	type CostOf(ReaderT r m) = CostOf m
+	{-# INLINE _cost #-}
+	_cost c h = lift ask>>= \r->
+		techExpHoistSearchT lift(`runReaderT` r) (_cost c h)
+	{-# INLINE _getCost #-}
+	_getCost = lift ask>>= \r->
+		techExpHoistSearchT lift(`runReaderT` r) _getCost
+
+instance (MonadWriter r m) => MonadWriter r(SearchT m) where
+	writer = lift.writer
+	-- TODO implement the remaining 'writer' methods.
+instance (MonadReader r m) => MonadReader r(SearchT m) where
+	ask = lift ask
+
+instance (MonadWriter r m) => MonadWriter r(StrategySearchT m) where
+	writer = lift.writer
+instance (MonadReader r m) => MonadReader r(StrategySearchT m) where
+	ask = lift ask
+
+-----------------------------------------------
+-- Some orphan instances
+
+instance Bounded Float where
+	minBound = -1/0
+	maxBound = 1/0
+
+instance Bounded Double where
+	minBound = -1/0
+	maxBound = 1/0
+
+deriving instance (Fractional f) => Fractional(Sum f)
+
+-----------------------------------------------
+
+{-# INLINE cost #-}
+cost c c2 = strategySearchT(_cost c c2)>>applyStrategy
+
+{-# INLINE getCost #-}
+getCost :: (Costly m) => StrategySearchT m(CostOf m,CostOf m)
+getCost = strategySearchT _getCost

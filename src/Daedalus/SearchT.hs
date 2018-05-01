@@ -1,139 +1,90 @@
-{-# LANGUAGE Rank2Types, ConstraintKinds, DeriveFunctor, ScopedTypeVariables #-}
+{-# LANGUAGE ConstraintKinds, Rank2Types, DeriveFunctor, GeneralizedNewtypeDeriving, ScopedTypeVariables #-}
 
-module Daedalus.SearchT (Modality, SearchT(..), techCallcc2, scope, cut, techResolveCallback, techExpHoistContT, techExpHoistSearchT, techCoda, runSearchT, collectSearchT) where
+module Daedalus.SearchT (Modality, SearchT(..), scope, cut, techResolveCallback, techExpHoistCodensity, techExpHoistSearchT, techCoda, runSearchT, collectSearchT) where
 
-import Control.Monad.Reader
 import Control.Monad.Writer
-import Control.Monad.Cont
+import Control.Monad.Trans.Maybe
+import Control.Monad.Codensity
 import Control.Monad.Trans
 import Control.Monad.Morph
 import Control.Applicative
-import Unsafe.Coerce
 
 type Modality = Monad
 
-instance (Modality m, Monoid r) => MonadPlus(ContT r m) where
-	{-# INLINE mzero #-}
-	mzero = ContT(\_ -> return mempty)
-	{-# INLINE mplus #-}
-	mplus m m2 = ContT(\f -> runContT m f>>runContT m2 f)
+_codensityMonadPlus (Codensity f) (Codensity f2) = Codensity(\x -> f x>>f2 x)
 
-instance (Modality m, Monoid r) => Alternative(ContT r m) where
-	{-# INLINE empty #-}
-	empty = mzero
-	{-# INLINE (<|>) #-}
-	(<|>) = mplus
-
-newtype SearchT m t = SearchT { unSearchT :: forall tech. (Monoid tech) => ReaderT(ContT tech m tech) (ContT tech(ContT tech m)) t }
+newtype SearchT m t = SearchT { unSearchT :: Codensity(MaybeT m) t }
 	-- The definition of alternative comes from the /outer/ continuation modality transformer.
-	deriving Functor
-
-instance (Modality m) => Monad(SearchT m) where
-	{-# INLINE return #-}
-	return x = SearchT(return x)
-	{-# INLINE (>>=) #-}
-	m >>= f = SearchT(unSearchT m>>=unSearchT. f)
-instance (Modality m) => Applicative(SearchT m) where
-	{-# INLINE pure #-}
-	pure = return
-	{-# INLINE (<*>) #-}
-	(<*>) = ap
-instance (Modality m) => MonadPlus(SearchT m) where
-	{-# INLINE mzero #-}
-	mzero = SearchT mzero
-	{-# INLINE mplus #-}
-	mplus m m2 = SearchT(mplus(unSearchT m) (unSearchT m2))
-instance (Modality m) => Alternative(SearchT m) where
-	{-# INLINE empty #-}
-	empty = mzero
-	{-# INLINE (<|>) #-}
-	(<|>) = mplus
+	deriving (Functor, Monad, Applicative)
 
 instance MonadTrans SearchT where
 	{-# INLINE lift #-}
-	lift m = SearchT(lift(lift(lift m)))
+	lift = SearchT. lift.lift
 
-{-# INLINE techCallcc2 #-}
-techCallcc2 f = ask>>= \x->lift(ContT(\k->callCC((`runContT` k).(`runReaderT` x).f)))
+instance (Monad m) => MonadPlus(SearchT m) where
+	mzero = SearchT mzero
+	mplus (SearchT f) (SearchT f2) = SearchT(_codensityMonadPlus f f2)
+
+instance (Monad m) => Alternative(SearchT m) where
+	empty = mzero
+	(<|>) = mplus
 
 -- | 'scope' and 'cut' work similarly as the 'seal' and 'collapse' functions respectively from monad-dijkstra.
 --   'cut' works similarly as Prolog's cut operation but uses 'scope' blocks to control how far the cut
 --   extends.
 {-# INLINE scope #-}
 scope :: (Modality m)
-	=> SearchT m t
-	-> SearchT m t
-scope m = SearchT(techCallcc2(\cont->local(const(cont(error"tech unused"))) (unSearchT m)))
+	=> SearchT m()
+scope = techExpHoistSearchT(liftM(const undefined).lift.runMaybeT) id (return())
 
 {-# INLINE cut #-}
 cut :: (Modality m)
 	=> SearchT m a
-cut = SearchT(ask>>=lift.lift>>return(error"no return"))
-
-{-# INLINE techCoerce #-}
-techCoerce :: ContT tech m t
-	-> ContT tech2 m t
-techCoerce = unsafeCoerce
-
-{-# INLINE techCoerce2 #-}
-techCoerce2 :: ContT tech m tech
-	-> ContT tech2 m tech2
-techCoerce2 = unsafeCoerce
-
-{-# INLINE techCoerce3 #-}
-techCoerce3 :: ReaderT(ContT tech m tech) (ContT tech(ContT tech m)) t
-	-> ReaderT(ContT tech m tech) (ContT tech(ContT tech2 m)) t
-techCoerce3 = unsafeCoerce
+cut = SearchT(lift mzero)
 
 -- | 'techResolveCallback' is a tool to make sure that polymorphic transformations operate
 --   over enough of the program, so that left-distributivity can be satisfied.
-{-# INLINE techResolveCallback #-}
 techResolveCallback :: forall m t. (Modality m)
 	=> (forall tech. SearchT m tech->SearchT m tech)
 	-> SearchT m t
 	-> SearchT m t
-techResolveCallback f m = SearchT(ask>>= \cont->
-	lift(ContT(\cont2->
-		let m' = SearchT(lift(lift(runContT
-			(runReaderT(techCoerce3(unSearchT m)) (techCoerce2 cont))
-			(techCoerce.cont2)))) in
-		runContT(runReaderT(unSearchT(f m')) cont) return)))
+techResolveCallback f (SearchT(Codensity f2)) = SearchT(Codensity(\f3->
+	runCodensity
+	(unSearchT$f$SearchT$lift$f2 f3)
+	return))
 
-{-# INLINE techExpHoistContT #-}
-techExpHoistContT :: (m r->n r2)
-	-> (n r2->m r)
-	-> ContT r m t
-	-> ContT r2 n t
-techExpHoistContT f f2 m = ContT(\g->f(runContT m(f2.g)))
+{-# INLINE techExpHoistCodensity #-}
+techExpHoistCodensity :: (forall r. m r->n r)
+	-> (forall r. n r->m r)
+	-> Codensity m t
+	-> Codensity n t
+techExpHoistCodensity f f2 (Codensity f3) = Codensity(\f4->f(f3(f2.f4)))
 
 -- | 'SearchT' enjoys exponential maps in the category of functors.
 {-# INLINE techExpHoistSearchT #-}
-techExpHoistSearchT :: (forall t. m t->n t)
-	-> (forall t. n t->m t)
+techExpHoistSearchT :: (forall t. MaybeT m t->MaybeT n t)
+	-> (forall t. MaybeT n t->MaybeT m t)
 	-> SearchT m t
 	-> SearchT n t
-techExpHoistSearchT f f2 m = SearchT(ask>>= \cont->
-	lift$techExpHoistContT(techExpHoistContT f f2) (techExpHoistContT f2 f) (runReaderT
-		(unSearchT m)
-		(techExpHoistContT f2 f cont)))
+techExpHoistSearchT f f2= SearchT. techExpHoistCodensity f f2. unSearchT
 
 -- | 'techCoda' applies a function to run following the operation chronologically. It can be
 -- used to do cleanup on a branch.
 {-# INLINE techCoda #-}
-techCoda :: (forall tech. (Monoid tech) => tech->ContT tech m tech)
+techCoda :: (Modality m)
+	=> MaybeT m()
 	-> SearchT m t
 	-> SearchT m t
-techCoda f m =
-	SearchT$ask>>= \cont2->lift(ContT(\cont->runContT(runReaderT(unSearchT m) cont2) cont>>=f))
+techCoda f (SearchT(Codensity f2)) = SearchT(Codensity(\f3->f2 f3>>= \r->f>>return r))
 
 -------------------------------------
 -- Eliminators at the SearchT type constructor.
 
 -- | A basic eliminator for 'SearchT' modality transformer.
 runSearchT :: (Modality m)
-	=> SearchT m()
-	-> m()
-runSearchT m = runContT(callCC$ \cont->(`runContT` return).(`runReaderT` cont(error"tech unused")).unSearchT$m) return
+	=> SearchT m t
+	-> m(Maybe t)
+runSearchT (SearchT m) = runMaybeT$runCodensity m return
 
 -- | Example:
 --
@@ -142,4 +93,6 @@ runSearchT m = runContT(callCC$ \cont->(`runContT` return).(`runReaderT` cont(er
 collectSearchT :: (Modality m)
 	=> SearchT(WriterT[t] m) t
 	-> m[t]
-collectSearchT = execWriterT.runSearchT.(>>=lift.tell.return)
+collectSearchT = execWriterT
+	.runSearchT
+	.(>>=lift.tell.return)
